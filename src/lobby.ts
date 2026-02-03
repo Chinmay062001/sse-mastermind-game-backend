@@ -8,11 +8,9 @@ export function createLobby(codeLength = 4, maxWinners = 2): Lobby {
   const lobby: Lobby = {
     id: randomId(),
     players: [],
-    secret: generateSecret(codeLength),
     codeLength,
     turnIndex: 0,
     winners: [],
-    guesses: [],
     started: false,
     maxWinners,
     numGames: 0,
@@ -25,11 +23,6 @@ export function createLobby(codeLength = 4, maxWinners = 2): Lobby {
 }
 
 export function resetGame(lobby: Lobby) {
-  lobby.secret = generateSecret(lobby.codeLength);
-
-  console.log(`🔑 Lobby ${lobby.id} secret: ${lobby.secret}`);
-
-  lobby.guesses = [];
   lobby.winners = [];
   lobby.turnIndex = 0;
   lobby.started = true;
