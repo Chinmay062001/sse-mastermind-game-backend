@@ -16,23 +16,10 @@ const allowedOrigins = [
 
 
 const corsOptions = {
-  origin: (origin: any, callback: any) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }       
-    return callback(new Error("Not allowed by CORS"));
-  },
+  origin: "*",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Requested-With",
-    "Accept",
-    "Cache-Control",
-    "Last-Event-ID",
-    "Connection"
-  ],
-  exposedHeaders: ["Content-Type"],
+  allowedHeaders:"*",
+  exposedHeaders: "*",
   credentials: true
 };
 
