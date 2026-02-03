@@ -9,22 +9,13 @@ const app = express();
 app.use(express.json());
 
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://your-frontend-domain.vercel.app",  // <-- replace with your real frontend
-];
-
-
 const corsOptions = {
   origin: "*",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders:"*",
-  exposedHeaders: "*",
-  credentials: true
+  allowedHeaders: ["Content-Type"],
 };
 
 app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
 
 // =========================
 // SERVER-ONLY SECRET STORAGE
@@ -59,6 +50,19 @@ function broadcastLobby(lobby: Lobby) {
     );
   });
 }
+
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+
+  next();
+});
+
 
 app.get("/health" , (req, res)=>{
     res.json({status: "OK"});
