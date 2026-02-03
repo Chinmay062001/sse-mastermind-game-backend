@@ -6,8 +6,36 @@ import { lobbies, randomId } from "./store";
 import { generateSecret, evaluate } from "./game";
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://your-frontend-domain.vercel.app",  // <-- replace with your real frontend
+];
+
+
+const corsOptions = {
+  origin: (origin: any, callback: any) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Cache-Control",
+    "Last-Event-ID",
+    "Connection"
+  ],
+  exposedHeaders: ["Content-Type"],
+  credentials: true
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // =========================
 // SERVER-ONLY SECRET STORAGE
@@ -43,6 +71,9 @@ function broadcastLobby(lobby: Lobby) {
   });
 }
 
+app.get("/health" , (req, res)=>{
+    res.json({status: "OK"});
+});
 // =========================
 // CREATE LOBBY
 // =========================
