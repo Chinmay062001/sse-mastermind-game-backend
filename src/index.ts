@@ -6,6 +6,8 @@ import { lobbies, randomId } from "./store";
 import { generateSecret, evaluate } from "./game";
 
 const app = express();
+app.use(express.json());
+
 
 const allowedOrigins = [
   "http://localhost:5173",
@@ -36,7 +38,6 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
-
 
 // =========================
 // SERVER-ONLY SECRET STORAGE
