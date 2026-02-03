@@ -1,81 +1,46 @@
-// server.ts
 import express from "express";
 import cors from "cors";
 import { Lobby, Player } from "./types";
-import { lobbies, randomId } from "./store";
+import { lobbies, lobbySecrets } from "./store";
+import { randomId } from "./utils";
 import { generateSecret, evaluate } from "./game";
 
 const app = express();
 app.use(express.json());
+app.use(cors({ origin: "*" }));
 
-
-const corsOptions = {
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type"],
-};
-
-app.use(cors(corsOptions));
-
-// =========================
-// SERVER-ONLY SECRET STORAGE
-// =========================
-const lobbySecrets = new Map<string, string>(); // lobbyId -> secret
-
-// =========================
-// SSE CLIENTS
-// =========================
-type Client = {
-  res: express.Response;
-  playerId: string;
-};
-
-const clients = new Map<string, Set<Client>>(); // lobbyId -> clients
+/* =====================
+   SSE CLIENTS
+===================== */
+type Client = { res: express.Response; playerId: string };
+const clients = new Map<string, Set<Client>>();
 
 function broadcastLobby(lobby: Lobby) {
   const lobbyClients = clients.get(lobby.id);
   if (!lobbyClients) return;
 
   lobbyClients.forEach(({ res, playerId }) => {
-    const serialized = {
+    const filtered = {
       ...lobby,
-      players: lobby.players.map(p => {
-        if (lobby.showAllGuesses || p.id === playerId) return p;
-        return { ...p, guesses: [] }; // hide others' guesses
-      })
+      players: lobby.players.map(p =>
+        lobby.showAllGuesses || p.id === playerId
+          ? p
+          : { ...p, guesses: [] }
+      )
     };
 
-    res.write(
-      `data: ${JSON.stringify({ type: "state", lobby: serialized })}\n\n`
-    );
+    res.write(`data: ${JSON.stringify({ lobby: filtered })}\n\n`);
   });
 }
 
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-
-  next();
-});
-
-
-app.get("/health" , (req, res)=>{
-    res.json({status: "OK"});
-});
-// =========================
-// CREATE LOBBY
-// =========================
+/* =====================
+   CREATE LOBBY
+===================== */
 app.post("/lobby/create", (req, res) => {
   const { numGames = 5, maxWinners = 1, showAllGuesses = true } = req.body;
-  const id = randomId();
 
   const lobby: Lobby = {
-    id,
+    id: randomId(),
     players: [],
     codeLength: 4,
     turnIndex: 0,
@@ -86,13 +51,13 @@ app.post("/lobby/create", (req, res) => {
     showAllGuesses
   };
 
-  lobbies.set(id, lobby);
+  lobbies.set(lobby.id, lobby);
   res.json(lobby);
 });
 
-// =========================
-// JOIN LOBBY
-// =========================
+/* =====================
+   JOIN LOBBY
+===================== */
 app.post("/lobby/:id/join", (req, res) => {
   const lobby = lobbies.get(req.params.id);
   if (!lobby) return res.sendStatus(404);
@@ -100,18 +65,24 @@ app.post("/lobby/:id/join", (req, res) => {
   const player: Player = {
     id: randomId(),
     name: req.body.name,
-    guesses: []
+    guesses: [],
+    stats: {
+      totalPoints: 0,
+      roundsWon: 0,
+      attempts: 0,
+      bestCorrectDigits: 0,
+      bestCorrectPositions: 0
+    }
   };
 
   lobby.players.push(player);
   broadcastLobby(lobby);
-
   res.json({ player, lobby });
 });
 
-// =========================
-// START GAME
-// =========================
+/* =====================
+   START GAME
+===================== */
 app.post("/lobby/:id/start", (req, res) => {
   const lobby = lobbies.get(req.params.id);
   if (!lobby) return res.sendStatus(404);
@@ -119,101 +90,133 @@ app.post("/lobby/:id/start", (req, res) => {
   lobby.started = true;
   lobby.turnIndex = 0;
   lobby.winners = [];
-  lobby.players.forEach(p => (p.guesses = []));
-
-  const secret = generateSecret(lobby.codeLength);
-  lobbySecrets.set(lobby.id, secret);
-
-  console.log(`🔑 Lobby ${lobby.id} secret: ${secret}`);
-
+  lobby.players.forEach(p => {
+    p.guesses = [];
+    p.stats.attempts = 0;
+    p.stats.bestCorrectDigits = 0;
+    p.stats.bestCorrectPositions = 0;
+  });
+  lobbySecrets.set(lobby.id, generateSecret(lobby.codeLength));
+  console.log("key",lobbySecrets )
   broadcastLobby(lobby);
   res.sendStatus(200);
 });
 
-// =========================
-// SUBMIT GUESS
-// =========================
+/* =====================
+   SUBMIT GUESS
+===================== */
 app.post("/lobby/:id/guess", (req, res) => {
   const lobby = lobbies.get(req.params.id);
   if (!lobby || !lobby.started) return res.sendStatus(400);
 
   const { playerId, guess } = req.body;
-  const currentPlayer = lobby.players[lobby.turnIndex];
+  const player = lobby.players[lobby.turnIndex];
+  if (player.id !== playerId) return res.sendStatus(403);
 
-  // Turn validation
-  if (currentPlayer.id !== playerId) {
-    return res.status(403).json({ error: "Not your turn" });
-  }
-
-  // Winner cannot guess again
-  if (lobby.winners.includes(playerId)) {
-    return res.status(403).json({ error: "Winner cannot guess again" });
-  }
-
-  const secret = lobbySecrets.get(lobby.id);
-  if (!secret) {
-    return res.status(500).json({ error: "Secret missing" });
-  }
-
+  const secret = lobbySecrets.get(lobby.id)!;
   const result = evaluate(secret, guess);
 
-  // Store guess
-  currentPlayer.guesses.push({
+  player.guesses.push({
     value: guess,
-    result: {
-      correctPositions: result.correctPositions,
-      correctDigits: result.correctDigits
-    },
-    round: currentPlayer.guesses.length + 1
+    result,
+    round: player.guesses.length + 1
   });
 
-  let isWin = false;
+  player.stats.attempts++;
+  player.stats.bestCorrectPositions = Math.max(
+    player.stats.bestCorrectPositions,
+    result.correctPositions
+  );
+  player.stats.bestCorrectDigits = Math.max(
+    player.stats.bestCorrectDigits,
+    result.correctDigits
+  );
 
-  // Check win
+  /* WIN */
   if (result.correctPositions === lobby.codeLength) {
     lobby.winners.push(playerId);
-    isWin = true;
+    player.stats.roundsWon++;
 
-    // Stop game ONLY when required winners reached
+    const bonus = [100, 70, 40][lobby.winners.length - 1] ?? 20;
+    player.stats.totalPoints += bonus;
+
     if (lobby.winners.length >= lobby.maxWinners) {
-      lobby.started = false;
-      broadcastLobby(lobby);
-
-      // Restart new round
-      setTimeout(() => {
-        lobby.started = true;
-        lobby.turnIndex = 0;
-        lobby.winners = [];
-        lobby.players.forEach(p => (p.guesses = []));
-
-        const newSecret = generateSecret(lobby.codeLength);
-        lobbySecrets.set(lobby.id, newSecret);
-
-        console.log(`🔑 Lobby ${lobby.id} new secret: ${newSecret}`);
-        broadcastLobby(lobby);
-      }, 2000);
-
-      return res.json({ ...result, isWin: true });
+      endRound(lobby);
+      return res.json({ isWin: true });
     }
   }
 
-  // Advance turn (skip winners)
-  let nextIndex = lobby.turnIndex;
+  /* NEXT TURN */
+  let next = lobby.turnIndex;
   do {
-    nextIndex = (nextIndex + 1) % lobby.players.length;
-  } while (lobby.winners.includes(lobby.players[nextIndex].id));
-
-  lobby.turnIndex = nextIndex;
+    next = (next + 1) % lobby.players.length;
+  } while (lobby.winners.includes(lobby.players[next].id));
+  lobby.turnIndex = next;
 
   broadcastLobby(lobby);
-  res.json({ ...result, isWin });
+  res.json({ isWin: false });
 });
 
-// =========================
-// SSE STREAM
-// =========================
+/* =====================
+   END ROUND (SCORING)
+===================== */
+function endRound(lobby: Lobby) {
+  const WINNER_BONUS = 10;
+  const MAX_EFFICIENCY_BONUS = 5;
+  const POS_POINTS = 4;
+  const DIGIT_POINTS = 2;
+
+  lobby.started = false;
+
+  lobby.players.forEach(p => {
+    const isWinner = lobby.winners.includes(p.id);
+
+    // 🎯 performance score (everyone)
+    const performanceScore =
+      p.stats.bestCorrectPositions * POS_POINTS +
+      p.stats.bestCorrectDigits * DIGIT_POINTS;
+
+    let roundPoints = Math.max(0, performanceScore);
+
+    if (isWinner) {
+      // ⚡ efficiency bonus (winner only)
+      const efficiencyBonus = Math.max(
+        0,
+        MAX_EFFICIENCY_BONUS - p.stats.attempts
+      );
+
+      roundPoints += WINNER_BONUS + efficiencyBonus;
+    }
+
+    // 🧮 apply points
+    p.stats.totalPoints += roundPoints;
+
+    // 🔄 reset round stats
+    p.stats.attempts = 0;
+    p.stats.bestCorrectDigits = 0;
+    p.stats.bestCorrectPositions = 0;
+    p.guesses = [];
+  });
+
+  broadcastLobby(lobby);
+
+  setTimeout(() => {
+    lobby.started = true;
+    lobby.turnIndex = 0;
+    lobby.winners = [];
+    lobbySecrets.set(lobby.id, generateSecret(lobby.codeLength));
+    broadcastLobby(lobby);
+  }, 2000);
+
+  console.log("key", lobbySecrets);
+}
+
+
+/* =====================
+   SSE STREAM
+===================== */
 app.get("/lobby/:id/stream", (req, res) => {
-  const lobbyId = req.params.id;
+  const { id } = req.params;
   const playerId = req.query.playerId as string;
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -221,35 +224,19 @@ app.get("/lobby/:id/stream", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  if (!clients.has(lobbyId)) {
-    clients.set(lobbyId, new Set());
-  }
-
-  clients.get(lobbyId)!.add({ res, playerId });
+  if (!clients.has(id)) clients.set(id, new Set());
+  clients.get(id)!.add({ res, playerId });
 
   req.on("close", () => {
-    clients.get(lobbyId)?.forEach(c => {
-      if (c.res === res) clients.get(lobbyId)!.delete(c);
+    clients.get(id)?.forEach(c => {
+      if (c.res === res) clients.get(id)!.delete(c);
     });
   });
 });
 
-// =========================
-// LEAVE LOBBY
-// =========================
-app.post("/lobby/:id/leave", (req, res) => {
-  const lobby = lobbies.get(req.params.id);
-  if (!lobby) return res.sendStatus(404);
-
-  lobby.players = lobby.players.filter(p => p.id !== req.body.playerId);
-  broadcastLobby(lobby);
-
-  res.sendStatus(200);
-});
-
-// =========================
-// START SERVER
-// =========================
-app.listen(4000, () => {
-  console.log("✅ Server running at http://localhost:4000");
-});
+/* =====================
+   START SERVER
+===================== */
+app.listen(4000, () =>
+  console.log("✅ Server running on http://localhost:4000")
+);
